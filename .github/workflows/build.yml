@@ -1,13 +1,14 @@
 name: Build APK
 
-# Chalta hai jab:
-#  - repo mein koi bhi push / upload ho (main ya master)
-#  - tag v* bane
-#  - Actions tab se "Run workflow" dabayein
+# Runs when:
+#  - anything is pushed or uploaded to main or master
+#  - a tag v* is created
+#  - "Run workflow" is pressed in the Actions tab
 #
-# Agar repo ki upar wali (root) folder mein koi .zip file ho (jaise PMSNotes_v3_merged.zip),
-# to workflow usay khud khol kar usi ka project build karta hai.
-# Agar zip na ho to repo ka apna project build hota hai.
+# If the top level of the repository contains .zip files (for example PMSNotes_v8.zip),
+# the workflow builds the zip that was added or changed in the latest commit.
+# Older zips can stay in the repository; they are ignored.
+# If there is no zip, the repository itself is built.
 
 on:
   push:
@@ -24,24 +25,35 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
-      - name: Project dhoondna (zip ho to khol dena)
+      - name: Find project (unzip if a zip is present)
         id: proj
         run: |
           set -e
-          ZIP=$(ls -t ./*.zip 2>/dev/null | head -n 1 || true)
+          # Pick the zip that was added or changed in the most recent commit
+          # (file timestamps are not reliable after a git checkout).
+          ZIP=""
+          BEST=-1
+          while IFS= read -r z; do
+            [ -n "$z" ] || continue
+            T=$(git log -1 --format=%ct -- "$z" 2>/dev/null || true)
+            T=${T:-0}
+            if [ "$T" -ge "$BEST" ]; then BEST=$T; ZIP=$z; fi
+          done < <(ls -1 ./*.zip 2>/dev/null | sort -V)
           if [ -n "$ZIP" ]; then
-            echo "Zip mili: $ZIP"
+            echo "Zip found: $ZIP"
             rm -rf _unzipped && mkdir _unzipped
             unzip -q "$ZIP" -d _unzipped
             SETTINGS=$(find _unzipped -name settings.gradle.kts -not -path '*/node_modules/*' | head -n 1)
             if [ -z "$SETTINGS" ]; then
-              echo "::error::Zip ke andar settings.gradle.kts nahi mili. Zip mein poora Android project hona chahiye."
+              echo "::error::settings.gradle.kts not found inside the zip. The zip must contain the whole Android project."
               exit 1
             fi
             DIR=$(dirname "$SETTINGS")
           else
-            echo "Zip nahi mili, repo ka apna project build hoga"
+            echo "No zip found, building the repository project"
             DIR=.
           fi
           echo "Project folder: $DIR"
